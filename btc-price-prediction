@@ -254,13 +254,13 @@ pyplot.show()
 
 # PLAIN NN
 
-# prepare LSTM model
+# prepare Neural Network model
 model = Sequential()
 model.add(Dense(32, input_dim=trainX.shape[1], activation='relu'))
 model.add(Dense(1, activation='relu'))
 model.compile(loss='mean_squared_error', optimizer=optimizers.Adam(lr=1e-3, decay=1e-5))
 
-# fit LSTM model
+# fit Neural Network model
 history = model.fit(trainX, trainY, epochs=16, batch_size=32, validation_data=(valX, valY), verbose=1, shuffle=False)
 
 # plot training loss vs validation loss to check for overfitting
@@ -324,7 +324,7 @@ model.add(GRU(32, input_shape=(trainXsh.shape[1], trainXsh.shape[2])))
 model.add(Dense(1))
 model.compile(loss='mean_squared_error', optimizer=optimizers.Adam(lr=1e-2, decay=1e-4))
 
-# fit SimpleRNN model
+# fit GRU model
 history = model.fit(trainXsh, trainY, epochs=16, batch_size=32, validation_data=(valXsh, valY), verbose=1, shuffle=False)
 
 # plot training loss vs validation loss to check for overfitting
