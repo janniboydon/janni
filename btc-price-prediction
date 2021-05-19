@@ -42,7 +42,7 @@ pyplot.show()
 timetrain = 1494 # number of days for training (default 4 years until 2018)
 timeval = 365 # number of days for validation (default 1 year from 2018-2019)
 timetrail = 90 # number of days before to look at
-timefuture = 30 # predict how many days in the future
+timefuture = 1 # predict how many days in the future
 
 # Get train data
 traindf = data.iloc[:timetrain+1,] # get train data
@@ -87,7 +87,6 @@ for i in range(timetrail, 0, -1): # prepare time shifted data table
 valshifted = concat(newcols, axis=1) # finalize time shifted data table
 valshifted.columns = list(sum(newcols_names, ())) # give label to columns
 valshifted.tail()
-
 
 # Train Model
 
@@ -279,7 +278,7 @@ print('Test RMSE: %.3f' % FCrmse)
 
 # compare predicted to actual (whole test data, note that this is a daily prediction)
 pyplot.plot(shiftedactualY, label='actual')
-pyplot.plot(shiftedinvpredY, label='predicted')
+pyplot.plot(FCshiftedinvpredY, label='predicted')
 pyplot.legend()
 pyplot.show()
 
@@ -311,7 +310,7 @@ print('Test RMSE: %.3f' % RNNrmse)
 
 # compare predicted to actual (whole test data, note that this is a daily prediction)
 pyplot.plot(shiftedactualY, label='actual')
-pyplot.plot(shiftedinvpredY, label='predicted')
+pyplot.plot(RNNshiftedinvpredY, label='predicted')
 pyplot.legend()
 pyplot.show()
 
@@ -343,6 +342,6 @@ print('Test RMSE: %.3f' % GRUrmse)
 
 # compare predicted to actual (whole test data, note that this is a daily prediction)
 pyplot.plot(shiftedactualY, label='actual')
-pyplot.plot(shiftedinvpredY, label='predicted')
+pyplot.plot(GRUshiftedinvpredY, label='predicted')
 pyplot.legend()
 pyplot.show()
