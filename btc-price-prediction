@@ -1,0 +1,348 @@
+## IMPORT PACKAGES
+
+from pandas import read_csv
+from pandas import DataFrame
+from pandas import concat
+from matplotlib import pyplot
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import LSTM
+from keras.layers import Dense
+from keras.layers import SimpleRNN
+from keras.layers import GRU
+from keras.layers import concatenate
+from keras import optimizers
+from sklearn.metrics import mean_squared_error
+from sklearn.linear_model import LinearRegression
+from sklearn import tree
+from sklearn.ensemble import RandomForestRegressor
+import xgboost as xgb
+import math
+import numpy as np
+
+
+## LOAD DATA AND PREPROCESS
+
+data = read_csv('Bitstamp_BTCUSD_d.csv', header=1, index_col=1) # load dataset and plot (data starts Nov. 28, 2014)
+data = data.iloc[0:,2:] # prepare table
+data = DataFrame(data.iloc[::-1]) # reverse table and turn to Data Frame
+data['volume'] = data['Volume BTC'] + data['Volume USD'] # preprocess (add volume btc and volume usd)
+data = data[['close','volume']] # prepare new table with only close and volume USD
+pyplot.figure() # plot only close and volume
+for i in range(len(data.columns)):
+    pyplot.subplot(len(data.columns), 1, i+1)
+    pyplot.plot(data.values[:, i])
+    pyplot.title(data.columns[i], y=0.75, loc='right')
+pyplot.show()
+
+
+## TRAINING
+
+# Set Parameters
+timetrain = 1494 # number of days for training (default 4 years until 2018)
+timeval = 365 # number of days for validation (default 1 year from 2018-2019)
+timetrail = 90 # number of days before to look at
+timefuture = 30 # predict how many days in the future
+
+# Get train data
+traindf = data.iloc[:timetrain+1,] # get train data
+trainscaler = MinMaxScaler(feature_range=(0, 1)) # initialize scaler
+trainscaled = DataFrame(trainscaler.fit_transform(traindf)) # scale data for better learning
+trainscaled.columns = ('close','volume') # give label to columns
+pyplot.figure() # plot training data
+for i in range(len(trainscaled.columns)):
+    pyplot.subplot(len(trainscaled.columns), 1, i+1)
+    pyplot.plot(trainscaled.iloc[:,i])
+    pyplot.title(trainscaled.columns[i], y=0.8, loc='right')
+pyplot.show()
+
+# Prepare time shifted train data table
+trainscaled.index = traindf.index # give label to rows
+newcols, newcols_names = list(), list() # initialize time shifted data table
+for i in range(timetrail, 0, -1):  # prepare time shifted data table
+    newcols.append(trainscaled.shift(i))
+    newcols_names.append(('close(t-%d)' % i,'volume(t-%d)' % i))
+trainshifted = concat(newcols, axis=1) # finalize time shifted data table
+trainshifted.columns = list(sum(newcols_names, ())) # give label to columns
+trainshifted.tail()
+
+# Get validation data
+valdf = data.iloc[timetrain+1:(timetrain+1+timeval),] # get validation data
+valscaler = MinMaxScaler(feature_range=(0, 1)) # initialize scaler
+valscaled = DataFrame(valscaler.fit_transform(valdf)) # scale data for better learning
+valscaled.columns = ('close','volume') # give label to columns
+pyplot.figure() # plot validation data
+for i in range(len(valscaled.columns)):
+    pyplot.subplot(len(valscaled.columns), 1, i+1)
+    pyplot.plot(valscaled.iloc[:,i])
+    pyplot.title(valscaled.columns[i], y=0.8, loc='right')
+pyplot.show()
+
+# Prepare time shifted validation data table
+valscaled.index = valdf.index # give label to rows
+newcols, newcols_names = list(), list() # initialize time shifted data table
+for i in range(timetrail, 0, -1): # prepare time shifted data table
+    newcols.append(valscaled.shift(i))
+    newcols_names.append(('close(t-%d)' % i,'volume(t-%d)' % i))
+valshifted = concat(newcols, axis=1) # finalize time shifted data table
+valshifted.columns = list(sum(newcols_names, ())) # give label to columns
+valshifted.tail()
+
+
+# Train Model
+
+# prepare train data
+trainX, trainY = trainshifted.iloc[timetrail:trainshifted.shape[0]-(timefuture-1),].values, DataFrame(trainscaled['close'].shift(-(timefuture-1)).iloc[timetrail:trainshifted.shape[0]-(timefuture-1),].values) # set train attributes and response
+trainXsh = trainX.reshape((trainX.shape[0], timetrail, len(trainscaled.columns))) # reshape training data for time-series
+
+# prepare validation data
+valX, valY = valshifted.iloc[timetrail:valshifted.shape[0]-(timefuture-1),].values, DataFrame(valscaled['close'].shift(-(timefuture-1)).iloc[timetrail:valshifted.shape[0]-(timefuture-1),].values) # set train attributes and response
+valXsh = valX.reshape((valX.shape[0], timetrail, len(valscaled.columns))) # reshape validation data for time-series
+
+# prepare LSTM model
+model = Sequential()
+model.add(LSTM(128, input_shape=(trainXsh.shape[1], trainXsh.shape[2])))
+model.add(Dense(1))
+model.compile(loss='mean_squared_error', optimizer=optimizers.Adam(lr=1e-3, decay=1e-4))
+
+# fit LSTM model
+history = model.fit(trainXsh, trainY, epochs=16, batch_size=32, validation_data=(valXsh, valY), verbose=1, shuffle=False)
+
+# plot training loss vs validation loss to check for overfitting
+pyplot.plot(history.history['loss'], label='train')
+pyplot.plot(history.history['val_loss'], label='val')
+pyplot.legend()
+pyplot.show()
+
+
+## PREDICTION
+
+testdf = data.iloc[(timetrain+1+timeval):,] # get test data
+testscaler = MinMaxScaler(feature_range=(0, 1)) # initialize scaler
+testscaled = DataFrame(testscaler.fit_transform(testdf)) # scale data for better learning
+testscaled.columns = ('close','volume') # give label to columns
+pyplot.figure() # plot training data
+for i in range(len(testscaled.columns)):
+    pyplot.subplot(len(testscaled.columns), 1, i+1)
+    pyplot.plot(testscaled.iloc[:,i])
+    pyplot.title(testscaled.columns[i], y=0.8, loc='right')
+pyplot.show()
+
+# Prepare time shifted test data table
+testscaled.index = testdf.index # give label to rows
+newcols, newcols_names = list(), list() # initialize time shifted data table
+for i in range(timetrail, 0, -1): # prepare time shifted data table
+    newcols.append(testscaled.shift(i))
+    newcols_names.append(('close(t-%d)' % i,'volume(t-%d)' % i))
+testshifted = concat(newcols, axis=1) # finalize time shifted data table
+testshifted.columns = list(sum(newcols_names, ())) # give label to columns
+testshifted.tail()
+
+# Produce and Evaluate Predictions
+
+# prepare test data
+testX, testY = testshifted.iloc[timetrail:,].values, DataFrame(testscaled['close'].shift(-(timefuture-1)).iloc[timetrail:,].values)
+testXsh = testX.reshape((testX.shape[0], timetrail, len(testscaled.columns))) # reshape test data for time-series
+
+predY = model.predict(testXsh) # make predictions using model
+invpredY = testscaler.inverse_transform(concatenate((predY, testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+shiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),invpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+rmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], shiftedinvpredY[(timefuture-1):(shiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % rmse)
+
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(shiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# LINEAR REGRESSION
+
+LR = LinearRegression().fit(np.vstack((trainX,valX)),np.vstack((trainY,valY))) # fit linear regression model
+
+LRpredY = LR.predict(testX) # make predictions using model
+LRinvpredY = testscaler.inverse_transform(concatenate((LRpredY.reshape(LRpredY.shape[0],1), testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+LRshiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),LRinvpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+LRrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], LRshiftedinvpredY[(timefuture-1):(shiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % LRrmse) 
+    
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(LRshiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# DECISION TREE
+
+DT = tree.DecisionTreeRegressor().fit(np.vstack((trainX,valX)),np.vstack((trainY,valY))) # fit decision tree
+
+DTpredY = DT.predict(testX) # make predictions using model
+DTinvpredY = testscaler.inverse_transform(concatenate((DTpredY.reshape(DTpredY.shape[0],1), testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+DTshiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),DTinvpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+DTrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], DTshiftedinvpredY[(timefuture-1):(shiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % DTrmse)
+                                          
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(DTshiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# Random Forest
+
+RF = RandomForestRegressor().fit(np.vstack((trainX,valX)),np.vstack((trainY,valY))) # fit random forest
+
+RFpredY = RF.predict(testX) # make predictions using model
+RFinvpredY = testscaler.inverse_transform(concatenate((RFpredY.reshape(RFpredY.shape[0],1), testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+RFshiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),RFinvpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+RFrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], RFshiftedinvpredY[(timefuture-1):(shiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % RFrmse)
+                                          
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(RFshiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# XGBoost
+
+XGB = xgb.XGBRegressor().fit(np.vstack((trainX,valX)),np.vstack((trainY,valY))) # fit XGBoost
+
+XGBpredY = XGB.predict(testX) # make predictions using model
+XGBinvpredY = testscaler.inverse_transform(concatenate((XGBpredY.reshape(XGBpredY.shape[0],1), testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+XGBshiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),XGBinvpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+XGBrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], XGBshiftedinvpredY[(timefuture-1):(shiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % XGBrmse)
+                                          
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(XGBshiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# NAIVE
+
+naive = data['close'].shift(timefuture) # shift
+naivY = naive.values[-testY.shape[0]:] # persist not predict
+shiftednaivY = np.append(np.repeat(np.nan, (timefuture-1)),naivY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+naivrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], shiftednaivY[(timefuture-1):(shiftednaivY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % naivrmse)
+
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(shiftednaivY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# PLAIN NN
+
+# prepare LSTM model
+model = Sequential()
+model.add(Dense(32, input_dim=trainX.shape[1], activation='relu'))
+model.add(Dense(1, activation='relu'))
+model.compile(loss='mean_squared_error', optimizer=optimizers.Adam(lr=1e-3, decay=1e-5))
+
+# fit LSTM model
+history = model.fit(trainX, trainY, epochs=16, batch_size=32, validation_data=(valX, valY), verbose=1, shuffle=False)
+
+# plot training loss vs validation loss to check for overfitting
+pyplot.plot(history.history['loss'], label='train')
+pyplot.plot(history.history['val_loss'], label='val')
+pyplot.legend()
+pyplot.show()
+
+FCpredY = model.predict(testX) # make predictions using model
+FCinvpredY = testscaler.inverse_transform(concatenate((FCpredY, testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+FCshiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),FCinvpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+FCrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], FCshiftedinvpredY[(timefuture-1):(FCshiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % FCrmse)
+
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(shiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# RNN
+
+# prepare SimpleRNN model
+model = Sequential()
+model.add(SimpleRNN(64, input_shape=(trainXsh.shape[1], trainXsh.shape[2])))
+model.add(Dense(1))
+model.compile(loss='mean_squared_error', optimizer=optimizers.Adam(lr=1e-3, decay=1e-4))
+
+# fit SimpleRNN model
+history = model.fit(trainXsh, trainY, epochs=16, batch_size=32, validation_data=(valXsh, valY), verbose=1, shuffle=False)
+
+# plot training loss vs validation loss to check for overfitting
+pyplot.plot(history.history['loss'], label='train')
+pyplot.plot(history.history['val_loss'], label='val')
+pyplot.legend()
+pyplot.show()
+
+RNNpredY = model.predict(testXsh) # make predictions using model
+RNNinvpredY = testscaler.inverse_transform(concatenate((RNNpredY, testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+RNNshiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),RNNinvpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+RNNrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], RNNshiftedinvpredY[(timefuture-1):(RNNshiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % RNNrmse)
+
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(shiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
+
+
+# GRU
+
+# prepare GRU model
+model = Sequential()
+model.add(GRU(32, input_shape=(trainXsh.shape[1], trainXsh.shape[2])))
+model.add(Dense(1))
+model.compile(loss='mean_squared_error', optimizer=optimizers.Adam(lr=1e-2, decay=1e-4))
+
+# fit SimpleRNN model
+history = model.fit(trainXsh, trainY, epochs=16, batch_size=32, validation_data=(valXsh, valY), verbose=1, shuffle=False)
+
+# plot training loss vs validation loss to check for overfitting
+pyplot.plot(history.history['loss'], label='train')
+pyplot.plot(history.history['val_loss'], label='val')
+pyplot.legend()
+pyplot.show()
+
+GRUpredY = model.predict(testXsh) # make predictions using model
+GRUinvpredY = testscaler.inverse_transform(concatenate((GRUpredY, testshifted.iloc[timetrail:,-1:]), axis=1))[:,0] # revert the scaling to get actual values
+GRUshiftedinvpredY = np.append(np.repeat(np.nan, (timefuture-1)),GRUinvpredY)
+actualY = testdf.iloc[timetrail:,0].values # extract actual values from original data
+shiftedactualY = np.append(actualY,np.repeat(np.nan, (timefuture-1)))
+GRUrmse = math.sqrt(mean_squared_error(shiftedactualY[(timefuture-1):(shiftedactualY.shape[0]-(timefuture-1)),], GRUshiftedinvpredY[(timefuture-1):(GRUshiftedinvpredY.shape[0]-(timefuture-1)),])) # calculate rmse
+print('Test RMSE: %.3f' % GRUrmse)
+
+# compare predicted to actual (whole test data, note that this is a daily prediction)
+pyplot.plot(shiftedactualY, label='actual')
+pyplot.plot(shiftedinvpredY, label='predicted')
+pyplot.legend()
+pyplot.show()
