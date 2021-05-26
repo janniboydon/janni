@@ -1,0 +1,245 @@
+## IMPORT PACKAGES
+
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils import class_weight
+import xgboost as xgb
+
+
+# Set parameters
+timetrain = 1639 # number of days for training (default until May 25 2019: we want two years simulation)
+timetrail = 30 # number of days before to look at
+locality = 14 # number of days before and after for a price to be a local low or local high
+
+
+## LOAD DATA AND PREPROCESS
+data = pd.read_csv('Bitstamp_BTCUSD_d_Recent.csv', header=1, index_col=1) # load dataset and plot (data starts Nov. 28, 2014)
+data = data.iloc[0:,2:] # prepare table
+data = pd.DataFrame(data.iloc[::-1]) # reverse table and turn to Data Frame
+data['volume'] = data['Volume BTC'] + data['Volume USD'] # preprocess (add volume btc and volume usd)
+data = data[['close','volume']] # prepare new table with only close and volume USD
+
+# Get train data
+traindf = data.iloc[:timetrain+1,] # get train data
+trainscaler = MinMaxScaler(feature_range=(0, 1)) # initialize scaler
+trainscaled = pd.DataFrame(trainscaler.fit_transform(traindf)) # scale data for better learning
+trainscaled.columns = ('close','volume') # give label to columns
+
+# Prepare time shifted train data table
+trainscaled.index = traindf.index # give label to rows
+newcols, newcols_names = list(), list() # initialize time shifted data table
+for i in range(timetrail, 0, -1):  # prepare time shifted data table
+    newcols.append(trainscaled.shift(i))
+    newcols_names.append(('close(t-%d)' % i,'volume(t-%d)' % i))
+trainshifted = pd.concat(newcols, axis=1) # finalize time shifted data table
+trainshifted.columns = list(sum(newcols_names, ())) # give label to columns
+
+
+# prepare train data
+trainX = pd.DataFrame(trainshifted.iloc[timetrail:trainshifted.shape[0],].values) # set train attributes and response
+pricetrainY = pd.DataFrame(trainscaled['close'].iloc[timetrail:trainshifted.shape[0],].values) # set train attributes and response
+
+#auto-manually set the buy and sell signals if local high/low else hold
+signal = list()
+signalsell = list()
+signalbuy = list()
+checkprice = np.zeros(locality*2+1)
+for i in range(locality,len(pricetrainY.values)-locality):
+    for j in range(i-locality,i+locality+1):
+        checkprice[j-i+locality]=pricetrainY.values[j]
+    if(pricetrainY.values[i]==max(checkprice)):
+        signal.append('SELL')
+        signalsell.append(pricetrainY.values[i])
+        signalbuy.append(0)
+    elif(pricetrainY.values[i]==min(checkprice)):
+        signal.append('BUY')
+        signalbuy.append(pricetrainY.values[i])
+        signalsell.append(0)
+    else:
+        signal.append('HOLD')
+        signalsell.append(0)
+        signalbuy.append(0)
+        
+#finalize training classification data
+finaltrainX = trainX.iloc[locality:(len(pricetrainY.values)-locality),:]
+finaltrainX.columns = trainshifted.columns
+finaltrainY = pd.DataFrame(signal)
+
+
+#plot buy and sell signals
+plotsell=pd.DataFrame(np.array(signalsell))
+plotbuy=pd.DataFrame(np.array(signalbuy))
+pyplot.figure()
+pyplot.scatter(range(locality,(len(signalsell)+locality)),plotsell[plotsell!=0],color='red')
+pyplot.scatter(range(locality,(len(signalbuy)+locality)),plotbuy[plotbuy!=0],color='green')
+pyplot.plot(pricetrainY)
+pyplot.plot
+
+
+# train XGBoost classifier
+classes_weights = class_weight.compute_sample_weight('balanced',finaltrainY)
+XGB = xgb.XGBClassifier(learning_rate=0.01, colsample_bytree = 0.6, subsample = 0.8, objective='binary:logistic', n_estimators=1000, reg_alpha = 0.3, max_depth=4, gamma=10).fit(finaltrainX,finaltrainY,sample_weight=classes_weights)
+                      
+                      
+## TEST DATA
+
+# Get test data
+testdf = data.iloc[(timetrain+1):,] # get test data
+testscaler = MinMaxScaler(feature_range=(0, 1)) # initialize scaler
+testscaled = pd.DataFrame(testscaler.fit_transform(testdf)) # scale data for better learning
+testscaled.columns = ('close','volume') # give label to columns
+
+# Prepare time shifted test data table
+testscaled.index = testdf.index # give label to rows
+newcols, newcols_names = list(), list() # initialize time shifted data table
+for i in range(timetrail, 0, -1): # prepare time shifted data table
+    newcols.append(testscaled.shift(i))
+    newcols_names.append(('close(t-%d)' % i,'volume(t-%d)' % i))
+testshifted = pd.concat(newcols, axis=1) # finalize time shifted data table
+testshifted.columns = list(sum(newcols_names, ())) # give label to columns
+
+# finalize test data
+testX = pd.DataFrame(testshifted.iloc[timetrail:,].values) # set train attributes and response
+pricetestY = pd.DataFrame(testscaled['close'].iloc[timetrail:testshifted.shape[0],].values) # set train attributes and response
+testX.columns = testshifted.columns
+
+
+# predict using XGBoost
+XGBpredY = XGB.predict(testX) # make predictions using model
+
+# prepare buy/sell signal order
+testsignalsell = list()
+testsignalbuy = list()
+for k in range(len(XGBpredY)):
+    if XGBpredY[k] == 'BUY':
+        testsignalbuy.append(pricetestY.values[k])
+        testsignalsell.append(0)
+    elif XGBpredY[k] == 'SELL':
+        testsignalbuy.append(0)
+        testsignalsell.append(pricetestY.values[k])
+    else:
+        testsignalbuy.append(0)
+        testsignalsell.append(0)
+
+# plot buy and sell signals as predicted
+testplotsell=pd.DataFrame(np.array(testsignalsell))
+testplotbuy=pd.DataFrame(np.array(testsignalbuy))
+pyplot.figure() # plot training data
+pyplot.scatter(range(len(testsignalsell)),testplotsell[testplotsell!=0],color='red')
+pyplot.scatter(range(len(testsignalbuy)),testplotbuy[testplotbuy!=0],color='green')
+pyplot.plot(pricetestY)
+pyplot.plot
+
+
+## SIMULATION
+trueprice=pd.DataFrame(data['close'].values) # get true (non-scaled) prices of test data
+testtrueprice=trueprice.iloc[len(data)-len(pricetestY):,] # adjust so same timeframe
+
+money = 100000
+state = 'HOLD'
+shares = 0
+for a in range(len(testtrueprice)):
+    if XGBpredY[a] == 'BUY' and state != 'BUY':
+        shares = (money/testtrueprice.values[a])*0.99
+        money = 0
+        print('Bought at %.3f, Coins held: %.3f, Money now: %.2f' % (testtrueprice.values[a], shares/50, money))
+        state = 'BUY'
+    if XGBpredY[a] == 'SELL' and state == 'BUY':
+        money = shares*testtrueprice.values[a]*0.99
+        shares = 0
+        print('Sold at %.3f, Coins held: %.3f, Money now: %.2f' % (testtrueprice.values[a], shares/50, money))
+        state = 'SELL'
+        
+        
+# predict using decision tree
+DT = DecisionTreeClassifier(min_samples_split=5).fit(finaltrainX,finaltrainY) # fit decision tree
+
+DTpredY = DT.predict(testX) # make predictions using model
+
+testsignalsell = list()
+testsignalbuy = list()
+for k in range(len(DTpredY)):
+    if DTpredY[k] == 'BUY':
+        testsignalbuy.append(pricetestY.values[k])
+        testsignalsell.append(0)
+    elif DTpredY[k] == 'SELL':
+        testsignalbuy.append(0)
+        testsignalsell.append(pricetestY.values[k])
+    else:
+        testsignalbuy.append(0)
+        testsignalsell.append(0)
+        
+testplotsell=pd.DataFrame(np.array(testsignalsell))
+testplotbuy=pd.DataFrame(np.array(testsignalbuy))
+pyplot.figure() # plot training data
+pyplot.scatter(range(len(testsignalsell)),testplotsell[testplotsell!=0],color='red')
+pyplot.scatter(range(len(testsignalbuy)),testplotbuy[testplotbuy!=0],color='green')
+pyplot.plot(pricetestY)
+pyplot.plot
+
+## SIMULATION
+trueprice=pd.DataFrame(data['close'].values)
+testtrueprice=trueprice.iloc[len(data)-len(pricetestY):,]
+
+money = 100000
+state = 'HOLD'
+shares = 0
+for a in range(len(testtrueprice)):
+    if DTpredY[a] == 'BUY' and state != 'BUY':
+        shares = (money/testtrueprice.values[a])*0.99
+        money = 0
+        print('Bought at %.3f, Coins held: %.3f, Money now: %.2f' % (testtrueprice.values[a], shares/50, money))
+        state = 'BUY'
+    if DTpredY[a] == 'SELL' and state == 'BUY':
+        money = shares*testtrueprice.values[a]*0.99
+        shares = 0
+        print('Sold at %.3f, Coins held: %.3f, Money now: %.2f' % (testtrueprice.values[a], shares/50, money))
+        state = 'SELL'
+        
+        
+## HOLD
+action=list()
+action.append('BUY')
+for a in range(len(testtrueprice)-2):
+    action.append('HOLD')
+action.append('SELL')
+
+testsignalsell = list()
+testsignalbuy = list()
+for k in range(len(action)):
+    if action[k] == 'BUY':
+        testsignalbuy.append(pricetestY.values[k])
+        testsignalsell.append(0)
+    elif action[k] == 'SELL':
+        testsignalbuy.append(0)
+        testsignalsell.append(pricetestY.values[k])
+    else:
+        testsignalbuy.append(0)
+        testsignalsell.append(0)
+        
+testplotsell=pd.DataFrame(np.array(testsignalsell))
+testplotbuy=pd.DataFrame(np.array(testsignalbuy))
+pyplot.figure() # plot training data
+pyplot.scatter(range(len(testsignalsell)),testplotsell[testplotsell!=0],color='red')
+pyplot.scatter(range(len(testsignalbuy)),testplotbuy[testplotbuy!=0],color='green')
+pyplot.plot(pricetestY)
+pyplot.plot
+
+money = 100000
+state = 'HOLD'
+shares = 0
+for a in range(len(testtrueprice)):
+    if action[a] == 'BUY' and state != 'BUY':
+        shares = (money/testtrueprice.values[a])*0.99
+        money = 0
+        print('Bought at %.3f, Coins held: %.3f, Money now: %.2f' % (testtrueprice.values[a], shares/50, money))
+        state = 'BUY'
+    if action[a] == 'SELL' and state == 'BUY':
+        money = shares*testtrueprice.values[a]*0.99
+        shares = 0
+        print('Sold at %.3f, Coins held: %.3f, Money now: %.2f' % (testtrueprice.values[a], shares/50, money))
